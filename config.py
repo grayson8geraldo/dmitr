@@ -51,9 +51,18 @@ class StrategyConfig:
 
     # Coin selection
     preferred_coins: list = field(default_factory=lambda: [
-        "BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT",
-        "XRP/USDT", "PEPE/USDT", "WIF/USDT", "ARB/USDT",
-        "OP/USDT", "AVAX/USDT", "LINK/USDT", "SUI/USDT",
+        # Top-tier (highest volume)
+        "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT",
+        # Large caps
+        "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT",
+        "DOT/USDT", "MATIC/USDT", "NEAR/USDT", "SUI/USDT",
+        "APT/USDT", "FIL/USDT", "LTC/USDT", "BCH/USDT",
+        # Mid caps (volatile, good for scalping)
+        "PEPE/USDT", "WIF/USDT", "FLOKI/USDT", "BONK/USDT",
+        "ARB/USDT", "OP/USDT", "INJ/USDT", "TIA/USDT",
+        "SEI/USDT", "JUP/USDT", "STX/USDT", "IMX/USDT",
+        "RENDER/USDT", "FET/USDT", "RUNE/USDT", "AAVE/USDT",
+        "ENA/USDT", "WLD/USDT", "ORDI/USDT", "PENDLE/USDT",
     ])
 
     # Filters
