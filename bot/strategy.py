@@ -118,7 +118,12 @@ class TradingStrategy:
             if ohlcv_df.empty:
                 return None
 
-            state = await self.analyzer.analyze_symbol(symbol, ohlcv_df)
+            # Funding rate is free from exchange public API
+            funding_rate = await self.exchange.get_funding_rate(symbol)
+
+            state = await self.analyzer.analyze_symbol(
+                symbol, ohlcv_df, funding_rate=funding_rate
+            )
             return state
 
         except Exception as e:

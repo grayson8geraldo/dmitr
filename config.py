@@ -45,11 +45,6 @@ class StrategyConfig:
     analysis_timeframe: str = "5m"
     trend_timeframe: str = "1h"
 
-    # Liquidation-based entry signals
-    min_liquidation_volume_usd: float = 500_000  # Min liquidation cascade to watch
-    oi_decline_threshold_pct: float = -0.02       # OI must drop 2%+ for short entry
-    oi_spike_threshold_pct: float = 0.03          # OI spike threshold
-
     # CVD (Cumulative Volume Delta)
     cvd_reversal_periods: int = 5         # Periods to confirm CVD reversal
     cvd_divergence_threshold: float = 0.3  # Min divergence strength

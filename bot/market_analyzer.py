@@ -1,15 +1,13 @@
 """
 Market Analysis Module.
-Analyzes liquidations, Open Interest, CVD, and volatility
-to find optimal entry points per the strategy.
+Uses free OHLCV-based indicators: RSI, Bollinger Bands, volume spikes,
+wick analysis (liquidation proxy), EMA trend, and CVD.
+No paid APIs required — all data from exchange public endpoints.
 """
 
-import asyncio
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
-import aiohttp
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -31,129 +29,131 @@ class MarketState:
     volume_24h_usd: float
     volatility_pct: float
 
-    # Open Interest data
-    open_interest_usd: float
-    oi_change_pct: float  # OI change over analysis period
-
-    # Liquidation data
-    long_liquidations_usd: float   # Recent long liquidations
-    short_liquidations_usd: float  # Recent short liquidations
+    # Technical indicators
+    rsi: float                   # RSI(14)
+    bb_position: float           # Price position in Bollinger Bands (0=lower, 1=upper)
+    ema_trend: float             # EMA9/EMA21 ratio (>1 = bullish)
+    volume_spike: float          # Current volume / avg volume ratio
+    wick_ratio_upper: float      # Upper wick / candle range (liquidation proxy)
+    wick_ratio_lower: float      # Lower wick / candle range (liquidation proxy)
 
     # CVD (Cumulative Volume Delta)
-    cvd_trend: float  # Positive = buying pressure, Negative = selling pressure
+    cvd_trend: float             # Positive = buying pressure, Negative = selling
 
-    # Funding rate
+    # Funding rate (free from exchange)
     funding_rate: float
 
     # Derived signal
     signal: Signal = Signal.NONE
-    signal_strength: float = 0.0  # 0 to 1
+    signal_strength: float = 0.0
     signal_reason: str = ""
 
 
 class MarketAnalyzer:
     """
-    Analyzes market conditions to find liquidation-based entry points.
+    Analyzes market conditions using free indicators.
 
     Strategy:
-    - SHORT: After pump, when short liquidations cascade, OI starts declining,
-             CVD shows selling pressure.
-    - LONG: After dump, when long liquidations cascade, price finds support,
-            CVD shows buying pressure.
+    - SHORT: RSI overbought + upper wick spikes (stop hunts) +
+             volume spike + CVD divergence + BB upper band rejection
+    - LONG: RSI oversold + lower wick spikes (stop hunts) +
+            volume spike + CVD reversal + BB lower band bounce
     """
 
-    def __init__(self, strategy_config, coinglass_api_key: str = ""):
+    def __init__(self, strategy_config):
         self.config = strategy_config
-        self.coinglass_api_key = coinglass_api_key
-        self.coinglass_base_url = "https://open-api-v3.coinglass.com/api"
-        self._session: Optional[aiohttp.ClientSession] = None
-
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            headers = {}
-            if self.coinglass_api_key:
-                headers["CG-API-KEY"] = self.coinglass_api_key
-            self._session = aiohttp.ClientSession(headers=headers)
-        return self._session
 
     async def close(self):
-        if self._session and not self._session.closed:
-            await self._session.close()
+        """No resources to clean up."""
+        pass
 
-    # ─── CoinGlass Data Fetching ───────────────────────────────────────
+    # ─── Technical Indicators ─────────────────────────────────────────
 
-    async def fetch_liquidation_data(self, symbol: str) -> dict:
-        """Fetch recent liquidation data from CoinGlass."""
-        try:
-            session = await self._get_session()
-            coin = symbol.split("/")[0]
-            url = f"{self.coinglass_base_url}/futures/liquidation/detail"
-            params = {"symbol": coin, "timeType": "1"}
+    @staticmethod
+    def _calc_rsi(close: np.ndarray, period: int = 14) -> float:
+        """Calculate RSI."""
+        if len(close) < period + 1:
+            return 50.0
+        deltas = np.diff(close[-(period + 1):])
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+        avg_gain = np.mean(gains)
+        avg_loss = np.mean(losses)
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / avg_loss
+        return float(100 - (100 / (1 + rs)))
 
-            async with session.get(url, params=params, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if data.get("success") and data.get("data"):
-                        return data["data"]
-        except Exception as e:
-            logger.debug(f"CoinGlass liquidation fetch failed for {symbol}: {e}")
+    @staticmethod
+    def _calc_bollinger(close: np.ndarray, period: int = 20, num_std: float = 2.0):
+        """Calculate Bollinger Bands position (0 = at lower, 1 = at upper)."""
+        if len(close) < period:
+            return 0.5
+        window = close[-period:]
+        sma = np.mean(window)
+        std = np.std(window)
+        if std == 0:
+            return 0.5
+        upper = sma + num_std * std
+        lower = sma - num_std * std
+        band_width = upper - lower
+        if band_width == 0:
+            return 0.5
+        position = (close[-1] - lower) / band_width
+        return float(np.clip(position, 0, 1))
 
-        return {"longLiquidationUsd": 0, "shortLiquidationUsd": 0}
+    @staticmethod
+    def _calc_ema(data: np.ndarray, period: int) -> float:
+        """Calculate EMA using numpy."""
+        if len(data) < period:
+            return float(data[-1])
+        multiplier = 2 / (period + 1)
+        ema = data[0]
+        for val in data[1:]:
+            ema = (val - ema) * multiplier + ema
+        return float(ema)
 
-    async def fetch_open_interest(self, symbol: str) -> dict:
-        """Fetch open interest data from CoinGlass."""
-        try:
-            session = await self._get_session()
-            coin = symbol.split("/")[0]
-            url = f"{self.coinglass_base_url}/futures/openInterest/ohlc-history"
-            params = {"symbol": coin, "timeType": "5m", "limit": 30}
+    @staticmethod
+    def _calc_wick_ratios(
+        open_p: np.ndarray, high: np.ndarray,
+        low: np.ndarray, close: np.ndarray, lookback: int = 5
+    ) -> tuple[float, float]:
+        """
+        Calculate average wick ratios over recent candles.
+        Large wicks = stop hunts / liquidation cascades.
+        Returns (upper_wick_ratio, lower_wick_ratio).
+        """
+        n = min(lookback, len(open_p))
+        upper_ratios = []
+        lower_ratios = []
 
-            async with session.get(url, params=params, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if data.get("success") and data.get("data"):
-                        return data["data"]
-        except Exception as e:
-            logger.debug(f"CoinGlass OI fetch failed for {symbol}: {e}")
+        for i in range(-n, 0):
+            candle_range = high[i] - low[i]
+            if candle_range <= 0:
+                continue
+            body_top = max(open_p[i], close[i])
+            body_bottom = min(open_p[i], close[i])
+            upper_wick = high[i] - body_top
+            lower_wick = body_bottom - low[i]
+            upper_ratios.append(upper_wick / candle_range)
+            lower_ratios.append(lower_wick / candle_range)
 
-        return {}
-
-    async def fetch_funding_rate(self, symbol: str) -> float:
-        """Fetch current funding rate."""
-        try:
-            session = await self._get_session()
-            coin = symbol.split("/")[0]
-            url = f"{self.coinglass_base_url}/futures/funding/current"
-            params = {"symbol": coin}
-
-            async with session.get(url, params=params, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if data.get("success") and data.get("data"):
-                        rates = data["data"]
-                        if rates:
-                            return float(rates[0].get("rate", 0))
-        except Exception as e:
-            logger.debug(f"CoinGlass funding fetch failed for {symbol}: {e}")
-
-        return 0.0
-
-    # ─── Exchange OHLCV Analysis ───────────────────────────────────────
+        avg_upper = float(np.mean(upper_ratios)) if upper_ratios else 0
+        avg_lower = float(np.mean(lower_ratios)) if lower_ratios else 0
+        return avg_upper, avg_lower
 
     def analyze_ohlcv(self, df: pd.DataFrame) -> dict:
         """
-        Analyze OHLCV data for volatility, trend, and CVD.
-
-        Args:
-            df: DataFrame with columns [timestamp, open, high, low, close, volume]
+        Full OHLCV analysis with all free indicators.
         """
-        if df.empty or len(df) < 10:
+        if df.empty or len(df) < 20:
             return {
-                "volatility": 0,
-                "price_change_1h": 0,
-                "price_change_24h": 0,
-                "cvd_trend": 0,
-                "volume_24h": 0,
+                "volatility": 0, "price_change_1h": 0,
+                "price_change_24h": 0, "cvd_trend": 0,
+                "volume_24h": 0, "current_price": 0,
+                "rsi": 50, "bb_position": 0.5,
+                "ema_trend": 1.0, "volume_spike": 1.0,
+                "wick_ratio_upper": 0, "wick_ratio_lower": 0,
             }
 
         close = df["close"].values
@@ -162,7 +162,7 @@ class MarketAnalyzer:
         high = df["high"].values
         low = df["low"].values
 
-        # Volatility: average true range as % of price
+        # ── Volatility (ATR-based) ──
         tr = np.maximum(
             high[1:] - low[1:],
             np.maximum(
@@ -173,20 +173,39 @@ class MarketAnalyzer:
         atr = np.mean(tr[-14:]) if len(tr) >= 14 else np.mean(tr)
         volatility = atr / close[-1] if close[-1] > 0 else 0
 
-        # Price changes
+        # ── Price changes ──
         price_change_1h = 0
-        if len(close) >= 12:  # 12 x 5min = 1 hour
+        if len(close) >= 12:
             price_change_1h = (close[-1] - close[-12]) / close[-12]
 
         price_change_24h = 0
-        if len(close) >= 288:  # 288 x 5min = 24 hours
+        if len(close) >= 288:
             price_change_24h = (close[-1] - close[-288]) / close[-288]
         elif len(close) >= 2:
             price_change_24h = (close[-1] - close[0]) / close[0]
 
-        # CVD approximation using volume delta
-        # Positive candle (close > open) = buying volume
-        # Negative candle (close < open) = selling volume
+        # ── RSI ──
+        rsi = self._calc_rsi(close)
+
+        # ── Bollinger Bands position ──
+        bb_position = self._calc_bollinger(close)
+
+        # ── EMA trend (EMA9 / EMA21) ──
+        ema9 = self._calc_ema(close, 9)
+        ema21 = self._calc_ema(close, 21)
+        ema_trend = ema9 / ema21 if ema21 > 0 else 1.0
+
+        # ── Volume spike (current vs average) ──
+        avg_vol = np.mean(volume[-50:]) if len(volume) >= 50 else np.mean(volume)
+        recent_vol = np.mean(volume[-3:]) if len(volume) >= 3 else volume[-1]
+        volume_spike = recent_vol / avg_vol if avg_vol > 0 else 1.0
+
+        # ── Wick ratios (liquidation proxy) ──
+        wick_upper, wick_lower = self._calc_wick_ratios(
+            open_prices, high, low, close
+        )
+
+        # ── CVD approximation ──
         deltas = []
         for i in range(len(close)):
             if close[i] >= open_prices[i]:
@@ -195,7 +214,6 @@ class MarketAnalyzer:
                 deltas.append(-volume[i])
 
         cvd = np.cumsum(deltas)
-        # CVD trend: compare last N periods
         n = min(self.config.cvd_reversal_periods, len(cvd))
         if n >= 2:
             cvd_recent = cvd[-n:]
@@ -214,6 +232,12 @@ class MarketAnalyzer:
             "cvd_trend": float(cvd_trend),
             "volume_24h": volume_24h,
             "current_price": float(close[-1]),
+            "rsi": float(rsi),
+            "bb_position": float(bb_position),
+            "ema_trend": float(ema_trend),
+            "volume_spike": float(volume_spike),
+            "wick_ratio_upper": float(wick_upper),
+            "wick_ratio_lower": float(wick_lower),
         }
 
     # ─── Signal Generation ─────────────────────────────────────────────
@@ -222,136 +246,175 @@ class MarketAnalyzer:
         self,
         symbol: str,
         ohlcv_df: pd.DataFrame,
+        funding_rate: float = 0.0,
     ) -> MarketState:
         """
         Full analysis of a symbol. Returns MarketState with signal.
+        funding_rate should be passed from exchange connector (free).
         """
-        # Analyze price data
-        ohlcv_analysis = self.analyze_ohlcv(ohlcv_df)
-
-        # Fetch on-chain/derivatives data in parallel
-        liq_data, oi_data, funding = await asyncio.gather(
-            self.fetch_liquidation_data(symbol),
-            self.fetch_open_interest(symbol),
-            self.fetch_funding_rate(symbol),
-        )
-
-        # Parse liquidation data
-        long_liqs = float(liq_data.get("longLiquidationUsd", 0))
-        short_liqs = float(liq_data.get("shortLiquidationUsd", 0))
-
-        # Parse OI change
-        oi_change_pct = 0.0
-        if isinstance(oi_data, list) and len(oi_data) >= 2:
-            oi_start = float(oi_data[0].get("o", 0))
-            oi_end = float(oi_data[-1].get("c", 0))
-            if oi_start > 0:
-                oi_change_pct = (oi_end - oi_start) / oi_start
+        analysis = self.analyze_ohlcv(ohlcv_df)
 
         state = MarketState(
             symbol=symbol,
-            price=ohlcv_analysis["current_price"],
-            price_change_1h_pct=ohlcv_analysis["price_change_1h"],
-            price_change_24h_pct=ohlcv_analysis["price_change_24h"],
-            volume_24h_usd=ohlcv_analysis["volume_24h"],
-            volatility_pct=ohlcv_analysis["volatility"],
-            open_interest_usd=0,
-            oi_change_pct=oi_change_pct,
-            long_liquidations_usd=long_liqs,
-            short_liquidations_usd=short_liqs,
-            cvd_trend=ohlcv_analysis["cvd_trend"],
-            funding_rate=funding,
+            price=analysis["current_price"],
+            price_change_1h_pct=analysis["price_change_1h"],
+            price_change_24h_pct=analysis["price_change_24h"],
+            volume_24h_usd=analysis["volume_24h"],
+            volatility_pct=analysis["volatility"],
+            rsi=analysis["rsi"],
+            bb_position=analysis["bb_position"],
+            ema_trend=analysis["ema_trend"],
+            volume_spike=analysis["volume_spike"],
+            wick_ratio_upper=analysis["wick_ratio_upper"],
+            wick_ratio_lower=analysis["wick_ratio_lower"],
+            cvd_trend=analysis["cvd_trend"],
+            funding_rate=funding_rate,
         )
 
-        # Generate signal
         state = self._generate_signal(state)
-
         return state
 
     def _generate_signal(self, state: MarketState) -> MarketState:
         """
-        Generate trading signal based on liquidation strategy.
+        Generate trading signal using free indicators.
 
-        SHORT signal conditions:
-        1. Recent short liquidations (pumped, shorts got rekt)
-        2. OI starting to decline (smart money exiting)
-        3. CVD turning negative (selling pressure)
-        4. Don't short green pumping candles!
+        SHORT signal (after pump exhaustion):
+        1. RSI overbought (>70) — momentum exhaustion
+        2. Large upper wicks — stop hunts / short liquidations happened
+        3. Volume spike — cascade activity
+        4. CVD turning negative — sellers stepping in
+        5. BB near upper band — mean reversion expected
+        6. EMA bearish cross starting
 
-        LONG signal conditions:
-        1. Recent long liquidations (dumped, longs got rekt)
-        2. CVD turning positive (buying pressure emerging)
-        3. Don't catch falling knives - wait for first bounce
+        LONG signal (after dump exhaustion):
+        1. RSI oversold (<30) — momentum exhaustion
+        2. Large lower wicks — long liquidation cascades happened
+        3. Volume spike — cascade activity
+        4. CVD turning positive — buyers stepping in
+        5. BB near lower band — mean reversion expected
+        6. EMA bullish cross starting
         """
         short_score = 0.0
         long_score = 0.0
         reasons_short = []
         reasons_long = []
 
-        # ── Short Signal Evaluation ──
+        # ── SHORT Signal ──
 
-        # 1. Short liquidations happened (shorts got rekt = price pumped)
-        if state.short_liquidations_usd > self.config.min_liquidation_volume_usd:
-            short_score += 0.3
+        # 1. RSI overbought
+        if state.rsi > 70:
+            score = min(0.3, (state.rsi - 70) / 30 * 0.3)
+            short_score += score
+            reasons_short.append(f"RSI overbought: {state.rsi:.0f}")
+        elif state.rsi > 60:
+            short_score += 0.1
+            reasons_short.append(f"RSI elevated: {state.rsi:.0f}")
+
+        # 2. Upper wick spikes (liquidation proxy)
+        if state.wick_ratio_upper > 0.4:
+            short_score += 0.25
             reasons_short.append(
-                f"Short liqs: ${state.short_liquidations_usd:,.0f}"
+                f"Upper wicks (stop hunts): {state.wick_ratio_upper:.0%}"
             )
+        elif state.wick_ratio_upper > 0.25:
+            short_score += 0.1
 
-        # 2. OI declining (smart money leaving after pump)
-        if state.oi_change_pct < self.config.oi_decline_threshold_pct:
-            short_score += 0.25
-            reasons_short.append(f"OI declining: {state.oi_change_pct:.2%}")
+        # 3. Volume spike
+        if state.volume_spike > 2.0:
+            short_score += 0.15
+            reasons_short.append(f"Volume spike: {state.volume_spike:.1f}x")
 
-        # 3. CVD turning negative (selling starting)
+        # 4. CVD turning negative
         if state.cvd_trend < -self.config.cvd_divergence_threshold:
-            short_score += 0.25
+            short_score += 0.2
             reasons_short.append(f"CVD bearish: {state.cvd_trend:.2f}")
 
-        # 4. Price recently pumped (confirms highs were taken)
+        # 5. BB near upper band
+        if state.bb_position > 0.85:
+            short_score += 0.15
+            reasons_short.append(f"BB upper rejection: {state.bb_position:.0%}")
+
+        # 6. EMA bearish (9 crossing below 21)
+        if state.ema_trend < 0.999:
+            short_score += 0.1
+            reasons_short.append(f"EMA bearish: {state.ema_trend:.4f}")
+
+        # 7. Price recently pumped
         if state.price_change_1h_pct > 0.02:
             short_score += 0.1
             reasons_short.append(
                 f"Recent pump: {state.price_change_1h_pct:.2%}"
             )
 
-        # 5. PENALTY: Don't short active green candles (pump still going)
+        # PENALTY: Don't short during active pump with strong buying
         if state.cvd_trend > 0.5 and state.price_change_1h_pct > 0.05:
             short_score -= 0.5
             reasons_short.append("SKIP: Active pump in progress")
 
-        # ── Long Signal Evaluation ──
+        # PENALTY: RSI not even elevated — no exhaustion signal
+        if state.rsi < 50:
+            short_score *= 0.3
 
-        # 1. Long liquidations happened (longs got rekt = price dumped)
-        if state.long_liquidations_usd > self.config.min_liquidation_volume_usd:
-            long_score += 0.3
-            reasons_long.append(
-                f"Long liqs: ${state.long_liquidations_usd:,.0f}"
-            )
+        # ── LONG Signal ──
 
-        # 2. CVD turning positive (buying pressure emerging)
-        if state.cvd_trend > self.config.cvd_divergence_threshold:
+        # 1. RSI oversold
+        if state.rsi < 30:
+            score = min(0.3, (30 - state.rsi) / 30 * 0.3)
+            long_score += score
+            reasons_long.append(f"RSI oversold: {state.rsi:.0f}")
+        elif state.rsi < 40:
+            long_score += 0.1
+            reasons_long.append(f"RSI low: {state.rsi:.0f}")
+
+        # 2. Lower wick spikes (liquidation proxy)
+        if state.wick_ratio_lower > 0.4:
             long_score += 0.25
+            reasons_long.append(
+                f"Lower wicks (stop hunts): {state.wick_ratio_lower:.0%}"
+            )
+        elif state.wick_ratio_lower > 0.25:
+            long_score += 0.1
+
+        # 3. Volume spike
+        if state.volume_spike > 2.0:
+            long_score += 0.15
+            reasons_long.append(f"Volume spike: {state.volume_spike:.1f}x")
+
+        # 4. CVD turning positive
+        if state.cvd_trend > self.config.cvd_divergence_threshold:
+            long_score += 0.2
             reasons_long.append(f"CVD bullish: {state.cvd_trend:.2f}")
 
-        # 3. Price recently dumped significantly
-        if state.price_change_1h_pct < -0.03:
+        # 5. BB near lower band
+        if state.bb_position < 0.15:
             long_score += 0.15
+            reasons_long.append(f"BB lower bounce: {state.bb_position:.0%}")
+
+        # 6. EMA bullish (9 crossing above 21)
+        if state.ema_trend > 1.001:
+            long_score += 0.1
+            reasons_long.append(f"EMA bullish: {state.ema_trend:.4f}")
+
+        # 7. Price recently dumped
+        if state.price_change_1h_pct < -0.02:
+            long_score += 0.1
             reasons_long.append(
                 f"Recent dump: {state.price_change_1h_pct:.2%}"
             )
 
-        # 4. First bounce detected (CVD reversal after dump)
-        if (
-            state.price_change_1h_pct < -0.02
-            and state.cvd_trend > 0
-        ):
-            long_score += 0.2
+        # 8. Bounce detected (CVD reversal after dump)
+        if state.price_change_1h_pct < -0.02 and state.cvd_trend > 0:
+            long_score += 0.15
             reasons_long.append("Bounce detected after dump")
 
-        # 5. PENALTY: Don't catch falling knives
+        # PENALTY: Don't catch falling knives
         if state.cvd_trend < -0.5 and state.price_change_1h_pct < -0.05:
             long_score -= 0.5
             reasons_long.append("SKIP: Active dump in progress")
+
+        # PENALTY: RSI not even low — no exhaustion signal
+        if state.rsi > 50:
+            long_score *= 0.3
 
         # ── Volume & Volatility Filters ──
         if state.volume_24h_usd < self.config.min_24h_volume_usd:
@@ -362,9 +425,9 @@ class MarketAnalyzer:
             short_score *= 0.5
             long_score *= 0.5
 
-        # ── Apply short bias (alts fall most of the time) ──
-        short_score *= self.config.short_bias + 0.3  # boost shorts
-        long_score *= (1 - self.config.short_bias) + 0.3  # reduce longs
+        # ── Short bias (alts fall most of the time) ──
+        short_score *= self.config.short_bias + 0.3
+        long_score *= (1 - self.config.short_bias) + 0.3
 
         # ── Final Signal Decision ──
         min_threshold = 0.4

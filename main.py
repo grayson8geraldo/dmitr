@@ -53,8 +53,6 @@ async def run_bot(config: BotConfig, live: bool = False, paper: bool = False):
     """Main bot execution loop."""
     load_dotenv()
 
-    coinglass_key = os.getenv("COINGLASS_API_KEY", "")
-
     if paper:
         # Paper trading: real data, virtual balance, no API keys needed
         config.exchange.paper_trading = True
@@ -82,7 +80,7 @@ async def run_bot(config: BotConfig, live: bool = False, paper: bool = False):
         exchange = ExchangeConnector(config.exchange, api_key, api_secret)
 
     # Initialize components
-    analyzer = MarketAnalyzer(config.strategy, coinglass_key)
+    analyzer = MarketAnalyzer(config.strategy)
     risk_manager = RiskManager(config.risk)
     position_manager = PositionManager(config.risk)
 
