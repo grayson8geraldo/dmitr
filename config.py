@@ -55,7 +55,7 @@ class StrategyConfig:
         "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT",
         # Large caps
         "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT",
-        "DOT/USDT", "MATIC/USDT", "NEAR/USDT", "SUI/USDT",
+        "DOT/USDT", "POL/USDT", "NEAR/USDT", "SUI/USDT",
         "APT/USDT", "FIL/USDT", "LTC/USDT", "BCH/USDT",
         # Mid caps (volatile, good for scalping)
         "PEPE/USDT", "WIF/USDT", "FLOKI/USDT", "BONK/USDT",
