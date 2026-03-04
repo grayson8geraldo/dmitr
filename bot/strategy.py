@@ -4,6 +4,7 @@ Combines market analysis with risk management to execute trades.
 """
 
 import asyncio
+from datetime import datetime
 from typing import Optional
 
 from loguru import logger
@@ -12,6 +13,7 @@ from bot.exchange_connector import ExchangeConnector
 from bot.market_analyzer import MarketAnalyzer, MarketState, Signal
 from bot.position_manager import PositionManager, PositionSide
 from bot.risk_manager import RiskManager
+from bot.trade_journal import TradeJournal
 from config import BotConfig
 
 
@@ -31,12 +33,16 @@ class TradingStrategy:
         analyzer: MarketAnalyzer,
         risk_manager: RiskManager,
         position_manager: PositionManager,
+        journal: Optional['TradeJournal'] = None,
     ):
         self.config = config
         self.exchange = exchange
         self.analyzer = analyzer
         self.risk_mgr = risk_manager
         self.pos_mgr = position_manager
+        self.journal = journal
+        # Track signal info per symbol for journal
+        self._signal_info: dict[str, dict] = {}
 
     async def scan_and_trade(self):
         """
@@ -183,6 +189,14 @@ class TradingStrategy:
             )
             self.risk_mgr.on_position_opened()
 
+            # Store signal info for journal
+            self._signal_info[symbol] = {
+                "reason_open": signal.signal_reason or "",
+                "signal_strength": signal.signal_strength,
+                "entry_time": datetime.now().isoformat(),
+                "balance_before": self.risk_mgr.current_balance,
+            }
+
             logger.info(
                 f"Trade executed | {side_str.upper()} {symbol} @ {price} | "
                 f"Size: ${trade_risk.position_size_usd} | "
@@ -249,9 +263,30 @@ class TradingStrategy:
             symbol, side, position.amount
         )
         if order:
+            balance_before = self.risk_mgr.current_balance
             pnl = self.pos_mgr.close_position(symbol, current_price)
             self.risk_mgr.record_trade_result(pnl, symbol)
             self.risk_mgr.on_position_closed()
+
+            # Log to journal
+            if self.journal:
+                sig = self._signal_info.pop(symbol, {})
+                self.journal.record_trade(
+                    symbol=symbol,
+                    side=side,
+                    entry_price=position.entry_price,
+                    exit_price=current_price,
+                    amount=position.amount,
+                    position_size_usd=position.position_size_usd,
+                    pnl_usd=pnl,
+                    reason_open=sig.get("reason_open", ""),
+                    reason_close=reason,
+                    signal_strength=sig.get("signal_strength", 0),
+                    entry_time=sig.get("entry_time", ""),
+                    balance_before=balance_before,
+                    balance_after=self.risk_mgr.current_balance,
+                )
+
             logger.info(
                 f"{reason} hit | Closed {side} {symbol} @ {current_price} | "
                 f"PnL: ${pnl:.2f}"

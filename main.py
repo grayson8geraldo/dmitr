@@ -25,6 +25,7 @@ from bot.market_analyzer import MarketAnalyzer
 from bot.position_manager import PositionManager
 from bot.risk_manager import RiskManager
 from bot.strategy import TradingStrategy
+from bot.trade_journal import TradeJournal
 
 
 def setup_logging(level: str = "INFO"):
@@ -85,8 +86,13 @@ async def run_bot(config: BotConfig, live: bool = False, paper: bool = False):
     risk_manager = RiskManager(config.risk)
     position_manager = PositionManager(config.risk)
 
+    # Trade journal (persistent for paper mode, optional for live)
+    journal_file = "paper_trades.json" if paper else "trades.json"
+    journal = TradeJournal(journal_path=journal_file)
+
     strategy = TradingStrategy(
-        config, exchange, analyzer, risk_manager, position_manager
+        config, exchange, analyzer, risk_manager, position_manager,
+        journal=journal,
     )
 
     try:
@@ -166,6 +172,9 @@ async def run_bot(config: BotConfig, live: bool = False, paper: bool = False):
                         f"Trades today: {report['daily_trades']} | "
                         f"Open positions: {len(positions)}"
                     )
+                    # Journal report every 50 iterations
+                    if iteration % 50 == 0:
+                        journal.print_report()
 
                 await asyncio.sleep(config.scan_interval_seconds)
 
