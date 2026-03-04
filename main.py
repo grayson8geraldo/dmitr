@@ -20,6 +20,7 @@ from loguru import logger
 
 from config import BotConfig
 from bot.exchange_connector import ExchangeConnector
+from bot.paper_connector import PaperExchangeConnector
 from bot.market_analyzer import MarketAnalyzer
 from bot.position_manager import PositionManager
 from bot.risk_manager import RiskManager
@@ -47,26 +48,39 @@ def setup_logging(level: str = "INFO"):
     )
 
 
-async def run_bot(config: BotConfig, live: bool = False):
+async def run_bot(config: BotConfig, live: bool = False, paper: bool = False):
     """Main bot execution loop."""
     load_dotenv()
 
-    api_key = os.getenv("EXCHANGE_API_KEY", "")
-    api_secret = os.getenv("EXCHANGE_API_SECRET", "")
     coinglass_key = os.getenv("COINGLASS_API_KEY", "")
 
-    if not api_key or not api_secret:
-        logger.error(
-            "Missing API credentials. "
-            "Copy .env.example to .env and fill in your keys."
+    if paper:
+        # Paper trading: real data, virtual balance, no API keys needed
+        config.exchange.paper_trading = True
+        exchange = PaperExchangeConnector(
+            config.exchange,
+            initial_balance=config.risk.initial_deposit,
         )
-        return
+        logger.info(
+            f"PAPER TRADING mode | "
+            f"Virtual balance: ${config.risk.initial_deposit:.2f}"
+        )
+    else:
+        api_key = os.getenv("EXCHANGE_API_KEY", "")
+        api_secret = os.getenv("EXCHANGE_API_SECRET", "")
 
-    # Override testnet setting
-    config.exchange.testnet = not live
+        if not api_key or not api_secret:
+            logger.error(
+                "Missing API credentials. "
+                "Copy .env.example to .env and fill in your keys."
+            )
+            return
+
+        # Override testnet setting
+        config.exchange.testnet = not live
+        exchange = ExchangeConnector(config.exchange, api_key, api_secret)
 
     # Initialize components
-    exchange = ExchangeConnector(config.exchange, api_key, api_secret)
     analyzer = MarketAnalyzer(config.strategy, coinglass_key)
     risk_manager = RiskManager(config.risk)
     position_manager = PositionManager(config.risk)
@@ -82,7 +96,7 @@ async def run_bot(config: BotConfig, live: bool = False):
         balance = await exchange.get_balance()
         risk_manager.update_balance(balance)
 
-        mode = "LIVE" if live else "TESTNET"
+        mode = "PAPER" if paper else ("LIVE" if live else "TESTNET")
         logger.info("=" * 60)
         logger.info(f"  DEPOSIT ACCELERATION BOT STARTED [{mode}]")
         logger.info(f"  Exchange: {config.exchange.name}")
@@ -228,6 +242,10 @@ def main():
         help="Run with real money (default: testnet)"
     )
     parser.add_argument(
+        "--paper", action="store_true",
+        help="Paper trading: real market data, virtual balance (no API keys needed)"
+    )
+    parser.add_argument(
         "--status", action="store_true",
         help="Show bot configuration and growth projection"
     )
@@ -246,6 +264,10 @@ def main():
 
     setup_logging(args.log_level)
 
+    if args.paper and args.live:
+        logger.error("Cannot use --paper and --live together.")
+        return
+
     if args.live:
         logger.warning("=" * 60)
         logger.warning("  LIVE TRADING MODE - REAL MONEY AT RISK!")
@@ -258,7 +280,7 @@ def main():
             logger.info("Cancelled by user")
             return
 
-    asyncio.run(run_bot(config, live=args.live))
+    asyncio.run(run_bot(config, live=args.live, paper=args.paper))
 
 
 if __name__ == "__main__":

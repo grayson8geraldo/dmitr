@@ -77,6 +77,7 @@ class ExchangeConfig:
     position_mode: str = "hedge"     # Hedge mode mandatory (both long+short)
     default_leverage: int = 10
     testnet: bool = True             # Start with testnet!
+    paper_trading: bool = False      # Paper trading: real data, virtual balance
 
 
 @dataclass
