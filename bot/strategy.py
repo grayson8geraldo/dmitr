@@ -73,18 +73,26 @@ class TradingStrategy:
         """Scan all preferred coins and return the strongest signal."""
         signals: list[MarketState] = []
 
-        # Fetch OHLCV data for all coins in parallel
-        tasks = []
-        for symbol in self.config.strategy.preferred_coins:
-            # Skip if already have a position
-            if self.pos_mgr.has_position(symbol):
-                continue
-            tasks.append(self._analyze_coin(symbol))
+        # Fetch OHLCV data in batches to avoid rate limits
+        coins = [
+            s for s in self.config.strategy.preferred_coins
+            if not self.pos_mgr.has_position(s)
+        ]
 
-        if not tasks:
+        if not coins:
             return None
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = []
+        batch_size = 5
+        for i in range(0, len(coins), batch_size):
+            batch = coins[i:i + batch_size]
+            batch_results = await asyncio.gather(
+                *[self._analyze_coin(s) for s in batch],
+                return_exceptions=True,
+            )
+            results.extend(batch_results)
+            if i + batch_size < len(coins):
+                await asyncio.sleep(0.5)
 
         for result in results:
             if isinstance(result, Exception):
