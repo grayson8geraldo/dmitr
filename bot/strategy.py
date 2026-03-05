@@ -86,7 +86,7 @@ class TradingStrategy:
             return None
 
         results = []
-        batch_size = 5
+        batch_size = 3
         for i in range(0, len(coins), batch_size):
             batch = coins[i:i + batch_size]
             batch_results = await asyncio.gather(
@@ -95,7 +95,7 @@ class TradingStrategy:
             )
             results.extend(batch_results)
             if i + batch_size < len(coins):
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.0)
 
         for result in results:
             if isinstance(result, Exception):

@@ -4,6 +4,7 @@ Uses real market data but simulates orders with a virtual balance.
 No API keys required for market data (public endpoints).
 """
 
+import asyncio
 import time
 import uuid
 from typing import Optional
@@ -115,18 +116,26 @@ class PaperExchangeConnector:
     async def fetch_ohlcv(
         self, symbol: str, timeframe: str = "5m", limit: int = 300
     ) -> pd.DataFrame:
-        """Fetch real OHLCV data from exchange."""
-        try:
-            ohlcv = await self.exchange.fetch_ohlcv(self._swap_symbol(symbol), timeframe, limit=limit)
-            df = pd.DataFrame(
-                ohlcv,
-                columns=["timestamp", "open", "high", "low", "close", "volume"],
-            )
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-            return df
-        except Exception as e:
-            logger.error(f"Failed to fetch OHLCV for {symbol}: {e}")
-            return pd.DataFrame()
+        """Fetch real OHLCV data from exchange with rate limit retry."""
+        swap = self._swap_symbol(symbol)
+        for attempt in range(3):
+            try:
+                ohlcv = await self.exchange.fetch_ohlcv(swap, timeframe, limit=limit)
+                df = pd.DataFrame(
+                    ohlcv,
+                    columns=["timestamp", "open", "high", "low", "close", "volume"],
+                )
+                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+                return df
+            except ccxt.RateLimitExceeded:
+                wait = 2 ** (attempt + 1)
+                logger.debug(f"Rate limited on {symbol}, retry in {wait}s")
+                await asyncio.sleep(wait)
+            except Exception as e:
+                logger.error(f"Failed to fetch OHLCV for {symbol}: {e}")
+                return pd.DataFrame()
+        logger.warning(f"Rate limit persists for {symbol}, skipping")
+        return pd.DataFrame()
 
     async def get_ticker(self, symbol: str) -> dict:
         """Fetch real ticker data."""
