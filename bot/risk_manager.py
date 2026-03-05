@@ -100,23 +100,21 @@ class RiskManager:
         position_size_usd = self.current_balance * position_pct
         margin_required = position_size_usd / self.config.leverage
 
-        # Risk per trade: 0.5% of deposit
+        # Use config SL/TP directly (1.67% / 5% = 1:3 RR)
+        stop_loss_pct = self.config.stop_loss_pct
+        take_profit_pct = self.config.take_profit_pct
+
+        # Verify actual risk doesn't exceed max risk per trade
         max_loss_usd = self.current_balance * self.config.max_risk_per_trade_pct
+        actual_loss_usd = position_size_usd * stop_loss_pct
 
-        # SL distance based on max allowed loss
-        # loss = position_size * sl_pct
-        # sl_pct = max_loss / position_size
-        stop_loss_pct = max_loss_usd / position_size_usd
+        # If loss would exceed risk budget, reduce position size
+        if actual_loss_usd > max_loss_usd:
+            position_size_usd = max_loss_usd / stop_loss_pct
+            margin_required = position_size_usd / self.config.leverage
+            actual_loss_usd = max_loss_usd
 
-        # TP at 1:3 RR
-        take_profit_pct = stop_loss_pct * self.config.risk_reward_ratio
         expected_profit_usd = position_size_usd * take_profit_pct
-
-        # Cap TP at strategy max (5% price movement)
-        if take_profit_pct > self.config.take_profit_pct:
-            take_profit_pct = self.config.take_profit_pct
-            expected_profit_usd = position_size_usd * take_profit_pct
-
         actual_rr = take_profit_pct / stop_loss_pct if stop_loss_pct > 0 else 0
 
         trade_risk = TradeRisk(
