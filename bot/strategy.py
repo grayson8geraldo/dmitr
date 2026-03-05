@@ -43,6 +43,9 @@ class TradingStrategy:
         self.journal = journal
         # Track signal info per symbol for journal
         self._signal_info: dict[str, dict] = {}
+        # Cache funding rates to reduce API calls (update every 5 min)
+        self._funding_cache: dict[str, float] = {}
+        self._funding_cache_time: float = 0
 
     async def scan_and_trade(self):
         """
@@ -126,11 +129,18 @@ class TradingStrategy:
             if ohlcv_df.empty:
                 return None
 
-            # Funding rate is free from exchange public API
-            funding_rate = await self.exchange.get_funding_rate(symbol)
+            # Use cached funding rate to reduce API calls
+            import time
+            now = time.time()
+            if now - self._funding_cache_time > 300:  # refresh every 5 min
+                self._funding_cache.clear()
+                self._funding_cache_time = now
+
+            if symbol not in self._funding_cache:
+                self._funding_cache[symbol] = await self.exchange.get_funding_rate(symbol)
 
             state = await self.analyzer.analyze_symbol(
-                symbol, ohlcv_df, funding_rate=funding_rate
+                symbol, ohlcv_df, funding_rate=self._funding_cache[symbol]
             )
             return state
 

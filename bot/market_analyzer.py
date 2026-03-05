@@ -352,8 +352,8 @@ class MarketAnalyzer:
             reasons_short.append("SKIP: Active pump in progress")
 
         # PENALTY: RSI not even elevated — no exhaustion signal
-        if state.rsi < 50:
-            short_score *= 0.3
+        if state.rsi < 45:
+            short_score *= 0.5
 
         # ── LONG Signal ──
 
@@ -413,24 +413,24 @@ class MarketAnalyzer:
             reasons_long.append("SKIP: Active dump in progress")
 
         # PENALTY: RSI not even low — no exhaustion signal
-        if state.rsi > 50:
-            long_score *= 0.3
+        if state.rsi > 55:
+            long_score *= 0.5
 
         # ── Volume & Volatility Filters ──
         if state.volume_24h_usd < self.config.min_24h_volume_usd:
-            short_score *= 0.3
-            long_score *= 0.3
+            short_score *= 0.6
+            long_score *= 0.6
 
         if state.volatility_pct < self.config.min_volatility_pct:
-            short_score *= 0.5
-            long_score *= 0.5
+            short_score *= 0.7
+            long_score *= 0.7
 
         # ── Short bias (alts fall most of the time) ──
         short_score *= self.config.short_bias + 0.3
         long_score *= (1 - self.config.short_bias) + 0.3
 
         # ── Final Signal Decision ──
-        min_threshold = 0.4
+        min_threshold = 0.3
 
         if short_score > long_score and short_score >= min_threshold:
             state.signal = Signal.SHORT
