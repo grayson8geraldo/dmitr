@@ -104,12 +104,20 @@ class PaperExchangeConnector:
 
     # ─── Market Data (Real) ────────────────────────────────────────
 
+    def _swap_symbol(self, symbol: str) -> str:
+        """Convert spot symbol to linear swap symbol for Bybit futures."""
+        if self.config.name == "bybit" and ":USDT" not in symbol:
+            swap = f"{symbol}:USDT"
+            if swap in self.exchange.markets:
+                return swap
+        return symbol
+
     async def fetch_ohlcv(
         self, symbol: str, timeframe: str = "5m", limit: int = 300
     ) -> pd.DataFrame:
         """Fetch real OHLCV data from exchange."""
         try:
-            ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            ohlcv = await self.exchange.fetch_ohlcv(self._swap_symbol(symbol), timeframe, limit=limit)
             df = pd.DataFrame(
                 ohlcv,
                 columns=["timestamp", "open", "high", "low", "close", "volume"],
@@ -123,7 +131,7 @@ class PaperExchangeConnector:
     async def get_ticker(self, symbol: str) -> dict:
         """Fetch real ticker data."""
         try:
-            ticker = await self.exchange.fetch_ticker(symbol)
+            ticker = await self.exchange.fetch_ticker(self._swap_symbol(symbol))
             return {
                 "price": float(ticker.get("last", 0)),
                 "bid": float(ticker.get("bid", 0)),
@@ -137,7 +145,7 @@ class PaperExchangeConnector:
     async def get_funding_rate(self, symbol: str) -> float:
         """Fetch real funding rate."""
         try:
-            funding = await self.exchange.fetch_funding_rate(symbol)
+            funding = await self.exchange.fetch_funding_rate(self._swap_symbol(symbol))
             return float(funding.get("fundingRate", 0))
         except Exception as e:
             logger.debug(f"Failed to fetch funding rate for {symbol}: {e}")
@@ -381,7 +389,7 @@ class PaperExchangeConnector:
 
     async def get_min_order_amount(self, symbol: str) -> float:
         """Get minimum order amount for a symbol."""
-        market = self.exchange.market(symbol)
+        market = self.exchange.market(self._swap_symbol(symbol))
         if market and "limits" in market:
             return float(market["limits"]["amount"]["min"] or 0)
         return 0.0
@@ -401,14 +409,15 @@ class PaperExchangeConnector:
             )
             return 0.0
 
-        market = self.exchange.market(symbol)
+        swap_sym = self._swap_symbol(symbol)
+        market = self.exchange.market(swap_sym)
         if market:
             precision = market.get("precision", {}).get("amount", 8)
             if isinstance(precision, int):
                 amount = round(amount, precision)
             else:
                 amount = float(
-                    self.exchange.amount_to_precision(symbol, amount)
+                    self.exchange.amount_to_precision(swap_sym, amount)
                 )
 
         return amount
