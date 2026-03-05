@@ -12,22 +12,22 @@ class RiskConfig:
     # Deposit and position sizing
     initial_deposit: float = 100.0
     target_deposit: float = 1000.0
-    max_position_pct: float = 0.10       # 10% of deposit per trade
-    min_position_pct: float = 0.05       # 5% of deposit per trade
-    leverage: int = 10                    # 10x leverage
+    max_position_pct: float = 0.30       # 30% of deposit per trade (winning)
+    min_position_pct: float = 0.20       # 20% of deposit per trade (losing)
+    leverage: int = 20                    # 20x leverage
 
     # Risk-reward
     risk_reward_ratio: float = 3.0       # 1:3 RR
-    max_risk_per_trade_pct: float = 0.005  # 0.5% of deposit risked per trade
-    max_profit_per_trade_pct: float = 0.015  # 1.5% of deposit target profit
+    max_risk_per_trade_pct: float = 0.02  # 2% of deposit risked per trade
+    max_profit_per_trade_pct: float = 0.06  # 6% of deposit target profit
 
     # Stop loss / Take profit (price movement %)
-    take_profit_pct: float = 0.05        # 5% price move for TP
-    stop_loss_pct: float = 0.0167        # ~1.67% price move for SL (1:3 RR)
+    take_profit_pct: float = 0.03        # 3% price move for TP
+    stop_loss_pct: float = 0.01          # 1% price move for SL (1:3 RR)
 
     # Position limits
-    max_open_positions: int = 3
-    max_daily_loss_pct: float = 0.03     # 3% max daily loss -> stop trading
+    max_open_positions: int = 5
+    max_daily_loss_pct: float = 0.10     # 10% max daily loss -> stop trading
 
     # Averaging rules
     averaging_distance_pct: float = 0.12  # 10-15% price move before averaging
@@ -79,7 +79,7 @@ class ExchangeConfig:
     name: str = "bybit"
     margin_mode: str = "cross"       # Cross-margin mandatory
     position_mode: str = "hedge"     # Hedge mode mandatory (both long+short)
-    default_leverage: int = 10
+    default_leverage: int = 20
     testnet: bool = True             # Start with testnet!
     paper_trading: bool = False      # Paper trading: real data, virtual balance
 
