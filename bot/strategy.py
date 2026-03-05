@@ -110,7 +110,19 @@ class TradingStrategy:
         # Sort by signal strength, pick the best
         signals.sort(key=lambda s: s.signal_strength, reverse=True)
 
-        best = signals[0]
+        # Quality filter: require minimum strength for execution
+        min_execution_strength = 0.5
+        strong_signals = [s for s in signals if s.signal_strength >= min_execution_strength]
+
+        if not strong_signals:
+            logger.info(
+                f"Signals found but too weak | "
+                f"Best: {signals[0].signal.value.upper()} {signals[0].symbol} "
+                f"strength {signals[0].signal_strength:.2f} < {min_execution_strength}"
+            )
+            return None
+
+        best = strong_signals[0]
         logger.info(
             f"Best signal: {best.signal.value.upper()} {best.symbol} | "
             f"Strength: {best.signal_strength:.2f} | "

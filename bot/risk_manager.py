@@ -90,12 +90,19 @@ class RiskManager:
         Uses fixed USD position sizing (not percentage slider!).
         At 10x leverage, $50 position uses only $5 of margin.
         """
-        # Position size: 5-10% of current balance
-        # Use adaptive sizing: smaller when losing, larger when winning
-        if self.daily_pnl >= 0:
-            position_pct = self.config.max_position_pct  # 10%
+        # Position size: adaptive based on daily PnL
+        # Gradual reduction: only drop to min after losing 5%+ of balance
+        daily_loss_pct = abs(self.daily_pnl) / self.current_balance if self.daily_pnl < 0 else 0
+        if daily_loss_pct >= 0.05:
+            position_pct = self.config.min_position_pct  # 20% - defensive
+        elif daily_loss_pct >= 0.02:
+            # Linear interpolation between max and min
+            t = (daily_loss_pct - 0.02) / 0.03
+            position_pct = self.config.max_position_pct - t * (
+                self.config.max_position_pct - self.config.min_position_pct
+            )
         else:
-            position_pct = self.config.min_position_pct  # 5%
+            position_pct = self.config.max_position_pct  # 30% - full size
 
         position_size_usd = self.current_balance * position_pct
         margin_required = position_size_usd / self.config.leverage

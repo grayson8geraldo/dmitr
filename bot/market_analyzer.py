@@ -430,7 +430,7 @@ class MarketAnalyzer:
         long_score *= (1 - self.config.short_bias) + 0.3
 
         # ── Final Signal Decision ──
-        min_threshold = 0.3
+        min_threshold = 0.45
 
         if short_score > long_score and short_score >= min_threshold:
             state.signal = Signal.SHORT

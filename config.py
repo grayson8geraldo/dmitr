@@ -22,8 +22,8 @@ class RiskConfig:
     max_profit_per_trade_pct: float = 0.06  # 6% of deposit target profit
 
     # Stop loss / Take profit (price movement %)
-    take_profit_pct: float = 0.03        # 3% price move for TP
-    stop_loss_pct: float = 0.01          # 1% price move for SL (1:3 RR)
+    take_profit_pct: float = 0.06        # 6% price move for TP
+    stop_loss_pct: float = 0.02          # 2% price move for SL (1:3 RR)
 
     # Position limits
     max_open_positions: int = 5
@@ -70,7 +70,7 @@ class StrategyConfig:
     min_volatility_pct: float = 0.03         # Min 3% daily volatility
 
     # Short bias (90-95% of alts fall 90% of time)
-    short_bias: float = 0.7   # 70% preference for shorts
+    short_bias: float = 0.5   # 50% balanced (no directional bias)
 
 
 @dataclass
