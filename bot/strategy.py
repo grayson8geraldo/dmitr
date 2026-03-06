@@ -86,7 +86,7 @@ class TradingStrategy:
             return None
 
         results = []
-        batch_size = 3
+        batch_size = 5
         for i in range(0, len(coins), batch_size):
             batch = coins[i:i + batch_size]
             batch_results = await asyncio.gather(
@@ -111,7 +111,7 @@ class TradingStrategy:
         signals.sort(key=lambda s: s.signal_strength, reverse=True)
 
         # Quality filter: require minimum strength for execution
-        min_execution_strength = 0.5
+        min_execution_strength = 0.40
         strong_signals = [s for s in signals if s.signal_strength >= min_execution_strength]
 
         if not strong_signals:
@@ -256,9 +256,15 @@ class TradingStrategy:
             ticker = await self.exchange.get_ticker(symbol)
             current_price = ticker["price"]
             if current_price <= 0:
+                logger.warning(f"Ticker returned price=0 for {symbol}, skipping check")
                 continue
 
             pnl_pct = position.calculate_pnl_pct(current_price)
+            logger.debug(
+                f"Monitoring {symbol} | Price: {current_price:.6f} | "
+                f"PnL: {pnl_pct:+.2f}% | "
+                f"SL: {position.stop_loss_price:.6f} | TP: {position.take_profit_price:.6f}"
+            )
 
             # Check take profit
             if self.pos_mgr.check_take_profit(symbol, current_price):

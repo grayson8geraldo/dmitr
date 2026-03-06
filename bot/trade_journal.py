@@ -174,21 +174,26 @@ class TradeJournal:
             f"{reason_close}"
         )
 
-    def get_stats(self) -> dict:
-        """Calculate full performance statistics."""
-        if not self.trades:
+    def get_stats(self, today_only: bool = True) -> dict:
+        """Calculate performance statistics. Filters by today if today_only=True."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        trades = [
+            t for t in self.trades
+            if not today_only or t.exit_time.startswith(today)
+        ]
+        if not trades:
             return {
                 "total_trades": 0,
                 "win_rate": 0.0,
                 "total_pnl": 0.0,
-                "message": "No trades yet",
+                "message": "No trades today" if today_only else "No trades yet",
             }
 
-        wins = [t for t in self.trades if t.pnl_usd > 0]
-        losses = [t for t in self.trades if t.pnl_usd <= 0]
-        total = len(self.trades)
+        wins = [t for t in trades if t.pnl_usd > 0]
+        losses = [t for t in trades if t.pnl_usd <= 0]
+        total = len(trades)
 
-        total_pnl = sum(t.pnl_usd for t in self.trades)
+        total_pnl = sum(t.pnl_usd for t in trades)
         avg_win = sum(t.pnl_usd for t in wins) / len(wins) if wins else 0
         avg_loss = sum(t.pnl_usd for t in losses) / len(losses) if losses else 0
         win_rate = len(wins) / total * 100
@@ -199,11 +204,11 @@ class TradeJournal:
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
 
         # Average duration
-        avg_duration = sum(t.duration_seconds for t in self.trades) / total
+        avg_duration = sum(t.duration_seconds for t in trades) / total
 
         # Per-symbol breakdown
         symbols: dict[str, dict] = {}
-        for t in self.trades:
+        for t in trades:
             if t.symbol not in symbols:
                 symbols[t.symbol] = {"trades": 0, "wins": 0, "pnl": 0.0}
             symbols[t.symbol]["trades"] += 1
@@ -212,12 +217,12 @@ class TradeJournal:
             symbols[t.symbol]["pnl"] += t.pnl_usd
 
         # Best/worst trade
-        best_trade = max(self.trades, key=lambda t: t.pnl_usd)
-        worst_trade = min(self.trades, key=lambda t: t.pnl_usd)
+        best_trade = max(trades, key=lambda t: t.pnl_usd)
+        worst_trade = min(trades, key=lambda t: t.pnl_usd)
 
         # Long vs Short breakdown
-        longs = [t for t in self.trades if t.side == "long"]
-        shorts = [t for t in self.trades if t.side == "short"]
+        longs = [t for t in trades if t.side == "long"]
+        shorts = [t for t in trades if t.side == "short"]
         long_wr = (sum(1 for t in longs if t.pnl_usd > 0) / len(longs) * 100) if longs else 0
         short_wr = (sum(1 for t in shorts if t.pnl_usd > 0) / len(shorts) * 100) if shorts else 0
 
