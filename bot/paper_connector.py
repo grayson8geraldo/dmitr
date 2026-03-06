@@ -111,6 +111,11 @@ class PaperExchangeConnector:
             swap = f"{symbol}:USDT"
             if swap in self.exchange.markets:
                 return swap
+            # Try 1000x variant (Bybit uses 1000PEPE, 1000FLOKI, etc.)
+            base = symbol.split("/")[0]
+            swap_1000 = f"1000{base}/USDT:USDT"
+            if swap_1000 in self.exchange.markets:
+                return swap_1000
         return symbol
 
     async def fetch_ohlcv(
